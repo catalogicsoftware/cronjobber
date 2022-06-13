@@ -19,8 +19,12 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime/pprof"
 	"sort"
 	"time"
+
+	goruntime "runtime"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -48,6 +52,7 @@ var (
 	apiGVStr                = cronjobberv1alpha1.GroupVersion.String()
 	scheduledTimeAnnotation = "hidde.co.cronjobber/scheduled-at"
 	nextScheduleDelta       = 100 * time.Millisecond
+	heapdumpFilesLocation   = "/workspace/profile"
 )
 
 // TZCronJobReconciler reconciles a TZCronJob object
@@ -76,6 +81,8 @@ type TZCronJobReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.11.0/pkg/reconcile
 func (r *TZCronJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
+
+	//	go doProfile(ctx, time.Second*10)
 	// creates the in-cluster config
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -129,12 +136,13 @@ func (r *TZCronJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Update the CronJob if needed
 	if updateStatus {
+		PrintMemStats("MemStat before update")
 		if err := r.Status().Update(ctx, cronJobCopy); err != nil {
 			log.Error(err, "unable to update CronJob status")
 			return ctrl.Result{}, err
 		}
 	}
-
+	PrintMemStats("MemStat before re-queve")
 	if requeueAfter != nil {
 		log.V(1).Info("Re-queuing cronjob", "cronjob", klog.KRef(cronJob.GetNamespace(), cronJob.GetName()), "requeueAfter", requeueAfter)
 		return ctrl.Result{
@@ -142,6 +150,7 @@ func (r *TZCronJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			RequeueAfter: *requeueAfter,
 		}, nil
 	}
+
 	log.V(1).Info("not seeing any value requeve")
 	return ctrl.Result{}, nil
 }
@@ -474,4 +483,77 @@ func (jm *TZCronJobReconciler) removeOldestJobs(cj *cronjobberv1alpha1.TZCronJob
 		}
 	}
 	return updateStatus
+}
+
+// doProfile writes heap dump at regular intervals and stops when context gets cancelled
+func doProfile(ctx context.Context, heapDumpFreq time.Duration) error {
+	log := log.FromContext(context.Background())
+	defer func() {
+		log.Info("Security scan memory profiling stopped")
+	}()
+
+	if err := os.RemoveAll(heapdumpFilesLocation + "/"); err != nil {
+		log.Error(err, "failed to delete old heap dump files")
+	}
+	if err := os.MkdirAll(heapdumpFilesLocation, 0777); err != nil {
+		log.Error(err, "error creating local directory for heap dump files")
+	} else {
+		log.Info("created directory for heap dump files")
+	}
+	ticker := time.NewTicker(heapDumpFreq)
+	defer ticker.Stop()
+	var i int
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("context cancelled, stopped profiling")
+			return ctx.Err()
+		case <-ticker.C:
+			filename := fmt.Sprintf("%s/heap-%v.dump", heapdumpFilesLocation, i)
+			log.Info("Writing current heap profile", "filename", filename)
+			writeHeapProfile(filename)
+			i++
+		}
+	}
+}
+
+func writeHeapProfile(filename string) {
+	log := log.FromContext(context.Background())
+	if file, err := os.Create(filename); err == nil {
+		goruntime.GC()
+		defer file.Close()
+		if err := pprof.WriteHeapProfile(file); err != nil {
+			log.Error(err, "error writing heap profile")
+		}
+	} else {
+		log.Error(err, "error creating file for dumping heap profile")
+	}
+}
+
+// PrintMemStats prints memory usage statistics
+func PrintMemStats(location string) {
+	log := log.FromContext(context.Background())
+	var m goruntime.MemStats
+	goruntime.ReadMemStats(&m)
+	log.Info(fmt.Sprintf("%s: MemStats: Heap %0.f MB, MaxHeap %0.f MB, Stack %0.f MB, Total %0.f MB, NumGC %d",
+		location,
+		ConvertToMiB(int64(m.HeapAlloc)),
+		ConvertToMiB(int64(m.HeapSys)),
+		ConvertToMiB(int64(m.StackSys)),
+		ConvertToMiB(int64(m.Sys)),
+		m.NumGC))
+}
+
+// ConvertToMiB converts size to MiB
+func ConvertToMiB(bytes interface{}) float64 {
+	var bytesFloat float64
+	switch bytes := bytes.(type) {
+	case int64:
+		bytesFloat = float64(bytes)
+	case uint64:
+		bytesFloat = float64(bytes)
+	default:
+		return -1
+	}
+	return bytesFloat / (1024 * 1024)
 }

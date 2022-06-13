@@ -31,7 +31,7 @@ spec:
         - /manager
         args:
         - --leader-elect
-        image: controller:latest
+        image: catalogicsoftware/cloudcasa-cronjobber:0.0.2
         name: manager
         securityContext:
           allowPrivilegeEscalation: false

@@ -1,6 +1,20 @@
 apiVersion: cronjobber.hidde.co/v1alpha1
 kind: TZCronJob
 metadata:
-  name: tzcronjob-sample
+  name: hello
 spec:
-  # TODO(user): Add fields here
+  schedule: "*/1 * * * *"
+  timezone: "Europe/Amsterdam"
+  successfulJobsHistoryLimit: 10
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: hello
+              image: busybox
+              args:
+                - /bin/sh
+                - -c
+                - date; echo "Hello, World!"
+          restartPolicy: OnFailure

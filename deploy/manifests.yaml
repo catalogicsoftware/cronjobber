@@ -4500,7 +4500,7 @@ spec:
         - --leader-elect
         command:
         - /manager
-        image: catalogicsoftware/cloudcasa-cronjobber:0.0.1
+        image: catalogicsoftware/cloudcasa-cronjobber:0.0.2
         livenessProbe:
           httpGet:
             path: /healthz
