@@ -38,6 +38,10 @@ import (
 	//+kubebuilder:scaffold:imports
 )
 
+const (
+	defaultNamespace = "cloudcasa-server"
+)
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
@@ -68,6 +72,17 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	envValue, exists := os.LookupEnv("MY_POD_NAMESPACE")
+
+	var amdsNamespace string
+	if !exists {
+		setupLog.Info("WARNING: MY_POD_NAMESPACE is unset", "amdsNamespace", defaultNamespace)
+		amdsNamespace = defaultNamespace
+	} else {
+		amdsNamespace = envValue
+	}
+
 	setupLog.Info("starting without metrics server")
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -76,6 +91,7 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "d0e9380f.hidde.co",
+		Namespace:              amdsNamespace,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
